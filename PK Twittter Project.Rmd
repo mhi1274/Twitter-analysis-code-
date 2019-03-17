@@ -1,0 +1,344 @@
+---
+title: "Twitter Analysis Project"
+author: "Matt H"
+date: "2/11/2019"
+output: html_document
+---
+
+```{r}
+#install.packages("twitteR")
+
+library(twitteR) 
+#saving the dataframe to keep on hardware
+#downloaded for tweets as lost over 50% to duplication, having to bind the two data sets
+#writing them to csv for safekeeping 
+
+#write.csv(d, 'chrissy_tweet.csv')
+#write.csv(d,'d.csv')
+```
+
+
+Imporing and cleaning the dataframe
+```{r}
+chrissy <- read.csv('chrissy_tweet.csv')
+d <- read.csv('d.csv')
+chrissy <- rbind(chrissy,d)
+chrissy$ID <- seq.int(nrow(chrissy)) #resetting the index 
+```
+
+```{r}
+#Removing Unwanted information from text, like twitter handles and emojis 
+chrissy$text <- gsub("&amp", "", chrissy$text)
+chrissy$text <- gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", chrissy$text)
+chrissy$text <- gsub("@\\w+", "", chrissy$text)
+chrissy$text <- gsub("[[:punct:]]", "", chrissy$text)
+chrissy$text <- gsub("[[:digit:]]", "", chrissy$text)
+chrissy$text <- gsub("http\\w+", "", chrissy$text)
+chrissy$text<- gsub("[ \t]{2,}", "", chrissy$text)
+chrissy$text <- gsub("^\\s+|\\s+$", "", chrissy$text)
+chrissy$text <- gsub("[^\x01-\x7F]", "", chrissy$text)
+chrissy$text <- tolower(chrissy$text)
+#Creating a Duplicate flag columns before subsetting data
+chrissy$dup <- c(duplicated(chrissy$text, fromLast = TRUE)  | duplicated(chrissy$text))
+
+
+library(dplyr)
+#Subsetting
+redux_chrissy <- subset(chrissy, dup == 'FALSE')
+```
+
+```{r}
+#subsetting wanted columns and then making new times columns
+redux_chrissy <- select(redux_chrissy, ID,text,created, isRetweet)
+library(lubridate)
+#Adding day of week column
+redux_chrissy$day <- weekdays(as.Date(redux_chrissy$created))
+
+#extracting time for hour to be used in sentimenal analysis
+get_date <- ymd_hms(redux_chrissy$created)
+get_time <- timeDate(get_date)
+get_hour <- hour(get_time) #Extracting the Hours
+#adding hour column 
+redux_chrissy$hour <- get_hour
+
+
+
+```
+```{r add on sentiment analysis}
+#create a sum during the hour, #perform the group sum function
+#first subsetting ot create new dataframe 
+test <- redux_chrissy
+test <- test %>%
+  group_by(hour) %>%
+  summarize(hour_sentiment = sum(sentiment))
+
+#then creating 
+redux_chrissy$hour_sum_sentiment <- test$hour_sentiment[match(redux_chrissy$hour, test$hour)]
+write.csv(redux_chrissy,'redux_chrissy.csv')
+```
+
+
+```{r reading in the new complete csv}
+redux_chrissy <- read.csv('redux_chrissy.csv')
+```
+
+Making a corpus from the tweets 
+```{r}
+library(tm)
+chrissy_corpus <- VCorpus(VectorSource(redux_chrissy$text))
+clean_corpus <- function(corpus){
+    #cleaned_corpus <- tm_map(corpus, content_transformer(replace_abbreviation))
+    cleaned_corpus <- tm_map(corpus, content_transformer(tolower))
+    cleaned_corpus <- tm_map(cleaned_corpus, removePunctuation)
+    cleaned_corpus <- tm_map(cleaned_corpus, removeNumbers)
+    cleaned_corpus <- tm_map(cleaned_corpus, removeWords, stopwords("english"))
+    custom_stop_words <- c("yes","cant","just","like","can","dont","ill","get","still","make","ive","didnt","said","sure","see","good","know","come","let","now","even","one","last","put","need","thing","thought","every","saw","thats","want","will","say","way","also","looks","back","tell","gonna","much","yes","cant","just","like","can","dont","ill","get","still","make","ive","didnt","said","sure","see","good","know","come","let","now","even","one","last","put","need","thing","thought","every","saw","thats","want","will","say","way","also","looks","back","tell","gonna","much","many","must","ever","youre")
+    cleaned_corpus <- tm_map(cleaned_corpus, removeWords, custom_stop_words)
+    cleaned_corpus <- tm_map(cleaned_corpus, stripWhitespace)
+    return(cleaned_corpus)
+}
+cleaned_chrissy_corpus <- clean_corpus(chrissy_corpus)
+chrissy_reviews <- TermDocumentMatrix(cleaned_chrissy_corpus)
+chrissy_reviews_m <- as.matrix(chrissy_reviews) #DONT OPEN
+
+
+```
+
+```{r sentimental analysis}
+library(tm)
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(sentimentr)
+library(lexicon)
+
+redux_chrissy$text <- iconv(redux_chrissy$text, from = "UTF-8", to = "ASCII", sub = "")
+redux_chrissy$sentiment <- sentiment_by(redux_chrissy$text)$ave_sentiment
+
+#Adding Sentimental Analysis to the corpus
+tidy_chrissy <- tidy(TermDocumentMatrix(cleaned_chrissy_corpus))
+bing_lex <- get_sentiments("nrc")
+mytext_nrc <- inner_join(tidy_chrissy, bing_lex, by = c("term" = "word"))
+
+```
+
+
+
+```{r playing with word frequency}
+library(qdap)
+library(readr)
+#below commented out code was to check if QDAP is working, which it is
+#term_count <- freq_terms(redux_chrissy$text, top = 20)
+#plot(term_count)
+```
+
+
+```{r corpus and word cloud }
+library(wordcloud2)
+term_frequency <- rowSums(chrissy_reviews_m)
+word_freqs <- data.frame(term = names(term_frequency), num = term_frequency)
+#word_freqs2 <- data.frame(term = names(term_frequency), num = term_frequency)
+
+wordcloud2(word_freqs,shape = "square")
+#letterCloud(word_freqs, word = "John", color="darkorange", backgroundColor="red")
+#stop words, "yes","cant","just","like","can","dont","ill","get","still","make","ive","didnt","said","sure","see","good","know","come","let","now","even","one","last","put","need","thing","thought","every","saw","thats","want","will","say","way","also","looks","back","tell","gonna","much","many","must","ever","youre"
+```
+
+```{r bi gram and tri gram}
+library(RWeka)
+library(wordcloud)
+tokenizer <- function(x)
+  NGramTokenizer(x,Weka_control(min=2,max=2))
+bigram_tdm <- TermDocumentMatrix(cleaned_chrissy_corpus,control = list(tokenize=tokenizer))
+bigram_tdm_m <- as.matrix(bigram_tdm)
+
+# Term Frequency
+term_frequency2 <- rowSums(bigram_tdm_m)
+# Sort term_frequency in descending order
+term_frequency2 <- sort(term_frequency2,dec=TRUE)
+############Word Cloud
+# Create word_freqs
+word_freqs2 <- data.frame(term = names(term_frequency2), num = term_frequency2)
+# Create a wordcloud for the values in word_freqs
+wordcloud2(word_freqs2,shape = "square")
+```
+
+```{r}
+#Tri gram
+tokenizer <- function(x)
+  NGramTokenizer(x,Weka_control(min= 4,max=4))
+trigram_tdm <- TermDocumentMatrix(cleaned_chrissy_corpus,control = list(tokenize=tokenizer))
+trigram_tdm_m <- as.matrix(trigram_tdm)
+
+# Term Frequency
+term_frequency3 <- rowSums(trigram_tdm_m)
+# Sort term_frequency in descending order
+term_frequency3 <- sort(term_frequency3,dec=TRUE)
+############Word Cloud
+# Create word_freqs
+word_freqs3 <- data.frame(term = names(term_frequency3), num = term_frequency3)
+# Create a wordcloud for the values in word_freqs
+wordcloud2(word_freqs3,shape = "square")
+
+```
+
+```{r tf-idf}
+tfidf_tdm <- TermDocumentMatrix(cleaned_chrissy_corpus,control=list(weighting=weightTfIdf))
+tfidf_tdm_m <- as.matrix(tfidf_tdm)
+
+# Term Frequency
+term_frequency_4 <- rowSums(tfidf_tdm_m)
+# Sort term_frequency in descending order
+term_frequency_4 <- sort(term_frequency_4,dec=TRUE)
+############Word Cloud
+library(wordcloud)
+# Create word_freqs
+word_freqs_4 <- data.frame(term = names(term_frequency_4), num = term_frequency_4)
+# Create a wordcloud for the values in word_freqs
+renderWordcloud2(wordcloud2(word_freqs_4, shape = "square"))
+
+
+```
+
+```{r compariosn and constrast problem}
+#need to seperate ext data to saturday vs sunday
+sat <- filter(redux_chrissy, day == 'Saturday')
+sat$text <- iconv(sat$text, from = 'UTF-8',to = "ASCII",sub="")
+sun <- filter(redux_chrissy, day == 'Sunday')
+sun$text <- iconv(sun$text, from = 'UTF-8',to = "ASCII",sub="")
+speech <- c(sat$text,sun$text)
+speech_corpus <- VCorpus(VectorSource(speech))
+clean_corpus <- function(corpus){
+    #cleaned_corpus <- tm_map(corpus, content_transformer(replace_abbreviation))
+    cleaned_corpus <- tm_map(corpus, content_transformer(tolower))
+    cleaned_corpus <- tm_map(cleaned_corpus, removePunctuation)
+    cleaned_corpus <- tm_map(cleaned_corpus, removeNumbers)
+    cleaned_corpus <- tm_map(cleaned_corpus, removeWords, stopwords("english"))
+    custom_stop_words <- c("yes","cant","just","like","can","dont","ill","get","still","make","ive","didnt","said","sure","see","good","know","come","let","now","even","one","last","put","need","thing","thought","every","saw","thats","want","will","say","way","also","looks","back","tell","gonna","much","yes","cant","just","like","can","dont","ill","get","still","make","ive","didnt","said","sure","see","good","know","come","let","now","even","one","last","put","need","thing","thought","every","saw","thats","want","will","say","way","also","looks","back","tell","gonna","much","many","must","ever","youre")
+    cleaned_corpus <- tm_map(cleaned_corpus, removeWords, custom_stop_words)
+    cleaned_corpus <- tm_map(cleaned_corpus, stripWhitespace)
+    return(cleaned_corpus)
+}
+cleaned_speech_corpus <- clean_corpus(speech_corpus)
+########### TDM########
+TDM_speech <- TermDocumentMatrix(cleaned_speech_corpus)
+TDM_speech_m <- as.matrix(TDM_speech)
+
+commonality.cloud(TDM_speech_m,colors=brewer.pal(8, "Dark2"),max.words = 100, random.order=FALSE)
+
+TDM_speech <- TermDocumentMatrix(cleaned_speech_corpus)
+#colnames(TDM_speech) <- c("sat","sub")
+TDM_speech_m <- as.matrix(TDM_speech)
+comparison.cloud(TDM_speech_m,colors=brewer.pal(8, "Dark2"),max.words = 200, random.order=FALSE)
+```
+
+```{r shiny app}
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(readtext)
+
+ui <- fluidPage(
+  titlePanel("Twitter Analysis"),
+  sidebarLayout(
+    sidebarPanel(
+      tabsetPanel(
+       
+        tabPanel("Emotions Filter",
+      checkboxGroupInput("cb","Select emotions(s)",choices = unique(mytext_nrc$sentiment),selected = unique(mytext_nrc$sentiment)[2],inline = TRUE)
+      ),
+      tabPanel("Data Table Filter",
+               
+               sliderInput("hour","Hour of Day", min = 0, max = 24,value = 7, dragRange = TRUE)
+               )
+      )
+    ),
+    mainPanel(
+      tabsetPanel(
+         tabPanel("ReadMe",
+         h2("ReadMe"),
+         includeMarkdown("Readme_Markdown.Rmd")
+         ),
+         
+        tabPanel("Wordcloud",
+                 h2("Wordcloud of tweets"),
+                 wordcloud2Output("wc")), #wordcloud
+        tabPanel("Bi-gram",
+                 h2("Bi-gram of tweets"),
+                 wordcloud2Output("bi")), #bi-gram
+        tabPanel("Tri-gram",
+                 h2('Tri-grams of tweets'),
+                 wordcloud2Output('tri')), #tri
+        tabPanel("Tf-IDF",
+                 h2("TF-IDF of tweets"),
+                 wordcloud2Output('tf')), #tf-idf
+        #tabPanel("Comparion/Contrast",
+                 #h2('Comparion/Contrast wordcloud'),
+                 #wordcloud2Output('cc')), #cc
+       # tabPanel("Sentiment Analysis",
+                 #h2("Sentiment of tweets"),
+                # plotlyOutput('sa')), #sentiment analysis
+        tabPanel("Emotion Analysis",
+                 h2("Emotions of tweets"),
+                 plotlyOutput('ea')), #emotion analysis
+        tabPanel("Data Table",
+                 h2("Table of Tweets"),
+                 dataTableOutput(outputId = "table"))
+
+      )
+    )
+  )
+)
+#word clouds are cauing errors to pop up 
+server <- function(input,output,session){
+#filtered_data <- reactive({filter(word_freqs, num <= input$freq)})
+filtered_data2 <- reactive({filter(mytext_nrc, sentiment == input$cb)}) #used in selecting desired emotions 
+filtered_data3 <- reactive({filter(redux_chrissy, hour <= input$hour)})
+
+output$wc <- renderWordcloud2(wordcloud2(word_freqs,shape = "square"))
+
+output$bi <- renderWordcloud2(wordcloud2(word_freqs2,shape = "square"))
+
+output$tri <- renderWordcloud2(wordcloud2(word_freqs3, shape = "square"))
+
+output$tf <- renderWordcloud2(wordcloud2(word_freqs_4, shape = "square"))
+
+#output$sa <- renderPlotly( #Error occurs, saying non-numeric argument for binary operator. below this is code for the grpah I was trying to prpduce for the app.
+#  {
+ # p <- ggplot(data = test,aes(x=hour, y = hour_sum_sentiment)+geom_line()+geom_point())
+  #ggplotly(p)
+  #p <- ylab("Sentiment Score") + xlab("Hour")
+#}
+  #)
+
+
+
+output$ea <- renderPlotly(
+  {
+      q <- ggplot(filtered_data2(),aes(x = sentiment))+geom_bar()
+      q <- q + xlab("Sentiment") + ylab("Total")
+      ggplotly(q)
+    } 
+)
+
+output$table <- renderDataTable(
+  {
+    select(filtered_data3(),c('text','created','day','hour','sentiment','hour_sum_sentiment'))
+  }
+)
+
+}
+
+shinyApp(ui,server)
+
+```
+
+
+```{r The sentiment graph I was trying to replicate on the shiny App}
+#This is what I was trying to prdouce on the app, nothing fancy but after several hours it would still not work.
+r <- ggplot(data = redux_chrissy, aes(x=hour, y = hour_sum_sentiment))+geom_line(color = 'red')+geom_point()
+r <- r + ylab("Sentiment Score") + xlab("Hour")
+ggplotly(r)
+
+```
